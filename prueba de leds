@@ -1,0 +1,207 @@
+; Archivo: leds.s
+; Dispositivo: PIC16F887
+; Autora: Paola Ayala Pineda
+; Compilador: pic-as (v2.35), MPLABX v6.00
+
+; Programa: 
+; Hardware: 
+
+; Creado:  
+; Última modificación:  
+
+ PROCESSOR 16F887
+
+; PIC16F887 Configuration Bit Settings
+
+; Assembly source line config statements
+
+; CONFIG1
+  CONFIG  FOSC = INTRC_NOCLKOUT ; Oscillator Selection bits (INTOSCIO oscillator: I/O function on RA6/OSC2/CLKOUT pin, I/O function on RA7/OSC1/CLKIN)
+  CONFIG  WDTE = OFF            ; Watchdog Timer Enable bit (WDT disabled and can be enabled by SWDTEN bit of the WDTCON register)
+  CONFIG  PWRTE = OFF            ; Power-up Timer Enable bit (PWRT enabled)
+  CONFIG  MCLRE = OFF           ; RE3/MCLR pin function select bit (RE3/MCLR pin function is digital input, MCLR internally tied to VDD)
+  CONFIG  CP = OFF              ; Code Protection bit (Program memory code protection is disabled)
+  CONFIG  CPD = OFF             ; Data Code Protection bit (Data memory code protection is disabled)
+  CONFIG  BOREN = OFF           ; Brown Out Reset Selection bits (BOR disabled)
+  CONFIG  IESO = OFF            ; Internal External Switchover bit (Internal/External Switchover mode is disabled)
+  CONFIG  FCMEN = OFF           ; Fail-Safe Clock Monitor Enabled bit (Fail-Safe Clock Monitor is disabled)
+  CONFIG  LVP = OFF              ; Low Voltage Programming Enable bit (RB3/PGM pin has PGM function, low voltage programming enabled)
+
+; CONFIG2
+  CONFIG  BOR4V = BOR40V        ; Brown-out Reset Selection bit (Brown-out Reset set to 4.0V)
+  CONFIG  WRT = OFF             ; Flash Program Memory Self Write Enable bits (Write protection off)
+
+
+
+// config statements should precede project file includes.
+#include <xc.inc>
+
+
+ RESET_TMR2 macro
+    BANKSEL TRISA
+    MOVLW   122
+    MOVWF   PR2
+
+    BANKSEL PORTA
+    BCF	    TMR2IF
+    ENDM
+
+
+
+; ------- VARIABLES EN MEMORIA --------
+PSECT udata_shr			;Memoria compartida
+    W_TEMP:		DS 1
+    STATUS_TEMP:	DS 1
+
+PSECT udata_bank0
+    LED:		DS 1
+    contador:		DS 1	;Variable para contar lo del TMR2
+
+LED0 EQU 0
+LED1 EQU 1
+
+PSECT resVect, class=CODE, abs, delta=2
+;------------ VECTOR RESET --------------
+ORG 00h        ;posición 0000h para el reset
+resetVec:
+    PAGESEL MAIN
+    GOTO MAIN
+
+PSECT intVect, class=CODE, abs, delta=2
+;------- VECTOR INTERRUPCIONES ----------
+ORG 04h        ;posición para el interrupciones
+PUSH:
+    MOVWF   W_TEMP	    ; Guardamos W
+    SWAPF   STATUS, W
+    MOVWF   STATUS_TEMP	    ; Guardamos STATUS
+
+ISR:			    ;subrutina de interrupción
+    BTFSC   TMR2IF	    ; Interrupcion de TMR2
+    CALL    INT_TMR2
+
+POP:
+    SWAPF   STATUS_TEMP, W
+    MOVWF   STATUS	    ; Recuperamos el valor de reg STATUS
+    SWAPF   W_TEMP, F
+    SWAPF   W_TEMP, W	    ; Recuperamos valor de W
+    RETFIE		    ; Regresamos a ciclo principal
+
+; ------ SUBRUTINAS DE INTERRUPCIONES ------
+INT_TMR2:
+    BCF	    TMR2IF		 ;Limpiamos la bandera de interrupcion TMR2
+    DECFSZ  contador, 1		 ;Se decrementa el contador
+    RETURN
+
+    MOVLW   1			 ;1 a W
+    MOVWF   contador		 ;W a contador_TMR2
+    BTFSC   LED, LED0		 ;Si RB0 es 0 salta una linea
+    BTFSC   LED, LED1
+    GOTO    OFF			 ;apaga
+    GOTO    ON			 ;enciende
+
+    OFF:
+    BCF   LED, LED0		 ;RA0 = 0
+    BCF	  LED, LED1
+    RETURN
+
+    ON:
+    BSF   LED, LED0		 
+    BSF	  LED, LED1	 ;RA0 = 1
+    RETURN
+    
+    /***************************
+    Por un momento creí que si se realizaba lo mismo, pero para PORTA, 1
+     funcionaría, pero así tampoco prende :(
+     
+     LA MANERA EN COMO ESTÁ DESCRITA ES COMO FUNCIONA EL LABORATORIO
+     PERO PARA UNA LED
+     
+    BCF	    TMR2IF		 ;Limpiamos la bandera de interrupcion TMR2
+    DECFSZ  contador, 1		 ;Se decrementa el contador
+    RETURN
+
+    MOVLW   1			 ;1 a W
+    MOVWF   contador		 ;W a contador_TMR2
+    BTFSC   PORTA, 0		 ;Si RB0 es 0 salta una linea
+    GOTO    OFF			 ;apaga
+    GOTO    ON			 ;enciende
+
+    OFF:
+    BCF   PORTA		 ;RA0 = 0
+    RETURN
+
+    ON:
+    BSF   PORTA		 ;RA0 = 1
+    RETURN
+     
+    
+    ****************************/
+
+
+PSECT code, delta=2, abs
+ORG 100h      ;posición para el código
+;----------------CONFIGURACIÓN------------
+MAIN:
+    CALL    CONFIG_IO	    ; Configuración de I/O
+    CALL    CONFIG_RELOJ    ; Configuración de reloj
+    CALL    CONFIG_TMR2	    ; Configuración de TMR2
+    CALL    CONFIG_INT	    ; Configuración de interrupciones
+   
+
+
+LOOP:
+    MOVF    LED
+    MOVWF   PORTA
+    GOTO    LOOP    ; Código que se va a estar ejecutando mientras no hayan interrupciones
+
+;-----------------SUBRUTINAS-------------
+
+CONFIG_IO:
+    BANKSEL ANSEL	    ;banco 11
+    CLRF    ANSEL	    ;pines digitales
+    CLRF    ANSELH
+
+    BANKSEL TRISA	    ;banco 01
+    BCF     TRISA, 0	    ;PORTA salida
+    BCF	    TRISA, 1
+
+    BANKSEL PORTA	    ;banco 00
+    CLRF    PORTA	    ;Limpiamos PORTA
+    MOVLW   1
+    MOVWF   contador
+    RETURN
+
+ CONFIG_RELOJ:
+    BANKSEL OSCCON	    ; cambiamos a banco 01
+    BSF	    OSCCON, 0	    ; SCS -> 1, Usamos reloj interno
+    BCF	    OSCCON, 6
+    BSF	    OSCCON, 5
+    BCF	    OSCCON, 4	    ; IRCF<2:0> -> 010 250KHz
+    RETURN
+
+
+CONFIG_TMR2:
+    BANKSEL T2CON	    ; Cambiamos a banco 00
+    BSF	    T2CKPS1	    ; prescaler 1:16
+    BSF	    T2CKPS0
+
+    BSF	    TOUTPS3	    ; postscaler 1:16
+    BSF	    TOUTPS2
+    BSF	    TOUTPS1
+    BSF	    TOUTPS0
+
+    BSF	    TMR2ON	    ; prendemos TMR2
+    BANKSEL TRISA
+    RESET_TMR2
+    RETURN
+
+CONFIG_INT:
+    BANKSEL PIE1	; Cambiamos a banco 01
+    BSF	    TMR2IE	; Habilitamos interrupciones de TMR2
+
+    BANKSEL INTCON	; Cambiamos a banco 00
+    BSF	    PEIE	; Habilitamos interrupciones de perifericos
+    BSF	    GIE		; Habilitamos interrupciones
+    BCF	    TMR2IF	; Limpiamos bandera de TMR2
+    RETURN
+END
