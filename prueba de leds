@@ -89,54 +89,21 @@ POP:
 ; ------ SUBRUTINAS DE INTERRUPCIONES ------
 INT_TMR2:
     BCF	    TMR2IF		 ;Limpiamos la bandera de interrupcion TMR2
-    DECFSZ  contador, 1		 ;Se decrementa el contador
-    RETURN
-
-    MOVLW   1			 ;1 a W
-    MOVWF   contador		 ;W a contador_TMR2
-    BTFSC   LED, LED0		 ;Si RB0 es 0 salta una linea
-    BTFSC   LED, LED1
-    GOTO    OFF			 ;apaga
+    BTFSS   contador, 1
     GOTO    ON			 ;enciende
 
     OFF:
-    BCF   LED, LED0		 ;RA0 = 0
-    BCF	  LED, LED1
+    BCF   PORTA, LED0		 ;RA0 = 0
+    BCF	  PORTA, LED1
+    CLRF  contador
     RETURN
 
     ON:
-    BSF   LED, LED0		 
-    BSF	  LED, LED1	 ;RA0 = 1
+    BSF   PORTA, LED0		 
+    BSF	  PORTA, LED1	 ;RA0 = 1
+    INCF  contador
     RETURN
     
-    /***************************
-    Por un momento creí que si se realizaba lo mismo, pero para PORTA, 1
-     funcionaría, pero así tampoco prende :(
-     
-     LA MANERA EN COMO ESTÁ DESCRITA ES COMO FUNCIONA EL LABORATORIO
-     PERO PARA UNA LED
-     
-    BCF	    TMR2IF		 ;Limpiamos la bandera de interrupcion TMR2
-    DECFSZ  contador, 1		 ;Se decrementa el contador
-    RETURN
-
-    MOVLW   1			 ;1 a W
-    MOVWF   contador		 ;W a contador_TMR2
-    BTFSC   PORTA, 0		 ;Si RB0 es 0 salta una linea
-    GOTO    OFF			 ;apaga
-    GOTO    ON			 ;enciende
-
-    OFF:
-    BCF   PORTA		 ;RA0 = 0
-    RETURN
-
-    ON:
-    BSF   PORTA		 ;RA0 = 1
-    RETURN
-     
-    
-    ****************************/
-
 
 PSECT code, delta=2, abs
 ORG 100h      ;posición para el código
@@ -150,8 +117,7 @@ MAIN:
 
 
 LOOP:
-    MOVF    LED
-    MOVWF   PORTA
+    
     GOTO    LOOP    ; Código que se va a estar ejecutando mientras no hayan interrupciones
 
 ;-----------------SUBRUTINAS-------------
@@ -205,3 +171,4 @@ CONFIG_INT:
     BCF	    TMR2IF	; Limpiamos bandera de TMR2
     RETURN
 END
+
