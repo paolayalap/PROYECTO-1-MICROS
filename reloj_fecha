@@ -1,0 +1,1058 @@
+; Archivo: reloj_fecha.s
+; Dispositivo: PIC16F887
+; Autora: Paola Ayala Pineda
+; Compilador: pic-as (v2.35), MPLABX v6.00
+
+; Programa: Reloj digital.
+; Hardware: Puerto A leds, puerto B botones de modo y configuración, puerto C 
+;           displays y puerto D transistores para los displays.
+
+    
+PROCESSOR 16F887
+ #include <xc.inc>
+ 
+ ;configuration word 1
+  CONFIG FOSC=INTRC_NOCLKOUT	// Oscillador Interno sin salidas, XT
+  CONFIG WDTE=OFF   // WDT disabled (reinicio repetitivo del pic)
+  CONFIG PWRTE=OFF   // PWRT enabled  (espera de 72ms al iniciar)
+  CONFIG MCLRE=OFF  // El pin de MCLR se utiliza como I/O
+  CONFIG CP=OFF	    // Sin protección de código
+  CONFIG CPD=OFF    // Sin protección de datos
+  CONFIG BOREN=OFF  // Sin reinicio cuándo el voltaje de alimentación baja de 4V
+  CONFIG IESO=OFF   // Reinicio sin cambio de reloj de interno a externo
+  CONFIG FCMEN=OFF  // Cambio de reloj externo a interno en caso de fallo
+  CONFIG LVP=OFF     // programación en bajo voltaje
+ 
+ ;configuration word 2
+  CONFIG WRT=OFF    // Protección de autoescritura por el programa desactivada
+  CONFIG BOR4V=BOR40V // Reinicio abajo de 4V, (BOR21V=2.1V)
+  
+ ;MACROS 
+  REINICIO_TMR0 MACRO   
+    banksel PORTA   
+    movlw   255      
+    movwf   TMR0    
+    bcf	    T0IF    
+    endm
+    
+ REINICIO_TMR1 MACRO   
+    movlw   194	    ;ciclo para un segundo, carga el valor para contar   
+    movwf   TMR1H	    
+    movlw   247						    
+    movwf   TMR1L
+    bcf	    TMR1IF 
+    endm
+    
+ DIVI	MACRO divisor  
+						    
+	movwf	var+0   ;se mueve var
+	clrf	var+1	 ;se limpia la variable
+	incf	var+1   ;contabiliza la cantidad de veces que restó
+	
+	movlw	divisor  
+	subwf	var, f	 ;resta el var con divisor hasta llegar a cero
+	btfsc   CARRY    ;verifica que tenga o no carry
+	goto	$-4	 ;si tiene carry se redirecciona a divisor
+	
+	
+	movlw	divisor	    
+	addwf	var, W	    
+	movwf	residuo	    ;
+	decf	var+1,W   
+	movwf	cociente   
+	ENDM
+	
+	
+;VARIABLES
+PSECT	udata_bank0
+//diplays	
+  display_hora:	DS 1
+  display_min:	DS 1
+  display_dia:	DS 1
+  display_mes:	DS 1
+  display_var:	DS 4
+
+//macro division    
+  cociente:	DS 1
+  residuo:	DS 1
+  var:		DS 2
+  unidad:	DS 1
+  decena:	DS 1
+
+//banderas de las subrutinas del vector interrupcion    
+  bandera_t0:	DS 1  
+  bandera_int:	DS 1
+    
+//variables generales del reloj    
+  estado:	DS 1
+  contador:	DS 2   
+ 
+//variables para mostrar en los displays    
+  unidad_:	DS 1
+  decena_:	DS 1
+  pruebas:	DS 4
+    
+  MODO		EQU 4
+  INC_1		EQU 0
+  DEC_1		EQU 1
+  INC_2		EQU 2
+  DEC_2		EQU 3	
+		
+		
+//variables del vector interrupcion		
+PSECT	udata_shr
+W_TEMP:	     DS 1
+STATUS_TEMP: DS 1
+    
+
+;VECTOR RESET
+PSECT resVect, class=CODE, abs, delta=2   
+ORG 00h         
+    
+resetVec:       
+  PAGESEL main	
+  goto main     
+  
+  
+;VECTOR DE INTERRUPCION
+PSECT intVect, class=CODE, abs, delta=2    
+ORG 04h          
+
+push:
+    movwf   W_TEMP	
+    swapf   STATUS, W  
+    movwf   STATUS_TEMP 
+    
+isr:
+    btfsc   T0IF	;encedido de los displays
+    call    INT_TMR0	  
+    
+    btfsc   TMR1IF	;contador
+    call    INT_TMR1	 
+    
+    btfsc   TMR2IF	;parpadeo de luces 
+    call    INT_TMR2	  
+    
+    btfsc   RBIF	;botones que controlan los modos
+    call    INT_IOCB
+      
+pop:
+    swapf   STATUS_TEMP, W  
+    movwf   STATUS	    
+    swapf   W_TEMP, F	   
+    swapf   W_TEMP, W	  
+    retfie    
+    
+;SUBRUTINAS DE INTERRUPCION
+INT_IOCB:		     ;cambio de estado
+    banksel PORTB
+    btfss   PORTB, MODO             
+    incf    estado
+    
+    movlw   1
+    subwf   estado, 0
+    btfsc   ZERO
+    goto    S1		;modo hora
+   
+    movlw   2 
+    subwf   estado, 0
+    btfsc   ZERO
+    goto    S2		;modo fecha
+    
+    movlw   3
+    subwf   estado, 0
+    btfsc   ZERO	;configura la hora
+    goto    S3
+    
+    movlw   4
+    subwf   estado, 0
+    btfsc   ZERO
+    goto    S4		;configura la fecha
+    
+    movlw   5
+    subwf   estado, 0
+    btfsc   ZERO
+    clrf    estado
+    goto    REINICIO_
+    
+S1:
+    bcf	    RBIF
+    return
+    
+S2:
+    bcf	    RBIF
+    return
+    
+S3:
+    btfss   PORTB, INC_1
+    incf    display_hora
+    btfss   PORTB, DEC_1
+    decf    display_hora
+
+    
+    btfss   PORTB, INC_2
+    incf    display_min
+    btfss   PORTB, DEC_2
+    decf    display_min
+    
+    bcf	    RBIF
+    return
+    
+S4:
+
+    btfss   PORTB, INC_1
+    incf    display_dia
+    btfss   PORTB, DEC_1
+    decf    display_dia
+
+    btfss   PORTB, INC_2
+    incf    display_mes
+    btfss   PORTB, DEC_2
+    decf   display_mes
+    bcf	    RBIF
+    return
+
+REINICIO_:
+    clrf    estado
+    incf    estado
+    bcf	    RBIF
+    return
+    
+INT_TMR0:	      ;interrupcion del TMRO
+    REINICIO_TMR0   ;10 mseg
+    clrf    PORTD     ;apagar displays para no mostrar traslapes
+      
+    btfss   bandera_t0, 0  ;ver si el bit 0 de banderas es 1 para saltarse a la prox
+    goto    display_0
+    
+    btfss   bandera_t0, 1 
+    goto   display_1
+  
+    btfss   bandera_t0, 2 
+    goto   display_2
+    
+    btfss   bandera_t0, 3 
+    goto   display_3
+       
+display_0:
+    bcf     bandera_t0, 3
+    bsf	    bandera_t0, 0
+    movf    display_var, W 
+    movwf   PORTC	    
+    bsf	    PORTD, 0
+    bcf     PORTD, 3
+    return
+    
+display_1:
+    bcf	    bandera_t0, 0
+    bsf	    bandera_t0, 1
+    movf    display_var+1, W 
+    movwf   PORTC	    
+    bsf	    PORTD, 1	
+    bcf PORTD, 0
+    return
+    
+display_2:
+    bcf	    bandera_t0, 1
+    bsf	    bandera_t0, 2	    
+    movf    display_var+2, W 
+    movwf   PORTC	    
+    bsf	    PORTD, 2	    
+    bcf PORTD, 1
+    return
+
+display_3:
+    bcf	    bandera_t0, 2
+    bsf	    bandera_t0, 3	    
+    movf    display_var+3, W 
+    movwf   PORTC	    
+    bsf	    PORTD, 3	    
+    bcf     PORTD, 2
+    return
+
+INT_TMR1:
+    REINICIO_TMR1	    
+    incf    contador      ;incrementa el contador cada segundo
+    
+    return 
+    
+INT_TMR2:
+    bcf	    TMR2IF	    ;limpia la bandera del TMR2
+    clrf    PORTA	    
+    
+    btfss   bandera_int, 0	 ;verifica que el bit sea 0 para saltar
+    goto    PARPADEO	         ;llama a parpadeo en caso no sea 0
+    goto    PARPADEO_REINICIO    ;reinicia parpadeo si es 0
+    
+PARPADEO:
+    bsf	    bandera_int, 0  
+    bsf	    PORTA, 5	      
+    bsf	    PORTA, 4	     
+    return
+    
+PARPADEO_REINICIO:
+    bcf	    bandera_int, 0  
+    bcf	    PORTA, 5
+    bcf	    PORTA, 4
+    clrf    bandera_int     
+    return
+    
+
+   
+;CONFIGURACIÓN
+main:
+    call CONFIG_IO
+    call CONFIG_RELOJ
+    call CONFIG_IOCRB
+    call CONFIG_TMR0
+    call CONFIG_TMR1	    
+    call CONFIG_TMR2	    
+    call CONFIG_INT
+    banksel PORTA
+    
+;LOOP PRINCIPAL 
+loop: 
+    call    MODO_ST
+    goto    loop    ;esto evitará que se reinicie constantemente
+    
+;SUBRUTINAS 
+CONFIG_IO:
+    
+   banksel ANSEL	
+   clrf ANSEL		
+   clrf ANSELH		;pines digitales
+
+   banksel TRISA	
+   bcf	TRISA, 0	;led modo hora
+   bcf	TRISA, 1	;led modo fecha
+   bcf	TRISA, 2	;led confi hora
+   bcf	TRISA, 3	;led confi fecha
+   bcf	TRISA, 4	;led parpadeo
+   bcf	TRISA, 5	;led parpadeo
+   bcf	TRISA, 6	;led temporizador
+   clrf TRISC
+
+   bcf  TRISD,0		;PORTD salida para transistores
+   bcf  TRISD,1	
+   bcf  TRISD,2	
+   bcf  TRISD,3	
+
+   bsf	TRISB, INC_1     
+   bsf	TRISB, DEC_1
+   bsf	TRISB, INC_2
+   bsf	TRISB, DEC_2
+   bsf	TRISB, MODO
+
+   bcf OPTION_REG, 7	;activa el pull up
+   bsf WPUB, 0     
+   bsf WPUB, 1
+   bsf WPUB, 2
+   bsf WPUB, 3
+   bsf WPUB, MODO
+
+   banksel PORTA	;limpia los puertos del pic
+   clrf PORTA
+   clrf PORTB
+   clrf PORTC
+   clrf PORTD
+   return    
+    
+CONFIG_RELOJ:
+    banksel OSCCON  ;se configura el oscilador 		    
+    bcf IRCF2	    
+    bsf IRCF1	    
+    bsf IRCF0	    ; 011 = 500KHz
+    bsf SCS	    ;el reloj interno se activa
+    return 
+    
+CONFIG_IOCRB:
+    banksel TRISA    
+    bsf	    IOCB, MODO     
+    bsf	    IOCB, INC_1  
+    bsf	    IOCB, INC_2  
+    bsf	    IOCB, DEC_1  
+    bsf	    IOCB, DEC_2  	
+    
+    banksel PORTA
+    movf    PORTB, W 
+    bcf	    RBIF     
+    bsf	    GIE	    
+    bsf	    RBIE
+    return
+
+CONFIG_TMR0:
+    banksel TRISA    
+    bcf	    T0CS    ;se coloca el reloj interno
+    bcf	    PSA	    ;
+    bsf	    PS2
+    bsf	    PS1
+    bsf	    PS0	    ;PS = 111 ->  1:256 
+     
+    banksel PORTA
+    REINICIO_TMR0
+    return 
+    
+CONFIG_TMR1:
+    banksel PORTA
+    bcf	    TMR1GE  ;TMR1 cuenta
+    bsf	    T1CKPS1 ;prescaler 1:8 
+    bsf	    T1CKPS0
+    bcf	    T1OSCEN 
+    bcf	    TMR1CS  ;se coloca el reloj interno 
+    bsf	    TMR1ON  ;se activa el tmr1 
+    REINICIO_TMR1 
+    return
+    
+CONFIG_TMR2:	    
+    banksel PORTA
+    bcf	    TOUTPS3 ;postscaler 1:16
+    bsf	    TOUTPS2
+    bsf	    TOUTPS1
+    bsf	    TOUTPS0
+    
+    bsf	    TMR2ON
+    bsf	    T2CKPS1 ;prescaler 16
+    bsf	    T2CKPS0
+    
+    banksel TRISB   ;PR2 = 500mseg/16*16*1*(500 KHz/4)) = 244
+    movwf   244
+    movwf   PR2
+    clrf    TMR2
+    bcf	    TMR2IF
+    return
+    
+CONFIG_INT:
+    banksel TRISA
+    bsf	    TMR1IE  ;se habilita la interrpcion de TMR1
+    bsf	    TMR2IE  ;se habilita la interrpcion de TMR2
+    banksel PORTA
+    bsf	    T0IE    ;se habilitar la interrupcion de TMR0 1
+    bcf	    T0IF    
+    bcf	    TMR1IF  
+    bcf	    TMR2IF  
+    
+    bsf	    PEIE    ;se habilitan las interrupciones perifericas
+    bsf	    GIE	    ;se habilitan las interrupciones globales
+    return    
+    
+    
+;SUBRTUINAS PARA MODOS DEL RELOJ    
+MODO_ST:
+    movlw   1
+    subwf   estado, 0
+    btfsc   ZERO
+    goto    HORA_ST
+   
+    movlw   2
+    subwf   estado, 0
+    btfsc   ZERO
+    goto    FECHA_ST
+    
+    movlw   3
+    subwf   estado, 0
+    btfsc   ZERO
+    goto    CONFIG_H
+    
+    movlw   4
+    subwf   estado, 0
+    btfsc   ZERO
+    goto    CONFIG_F
+     
+    movlw   5
+    subwf   estado, 0
+    btfsc   ZERO
+    clrf    estado
+    goto    REINICIO    
+    
+HORA_ST:
+    bsf	    PORTA, 0
+
+    call    MINCON
+    call    MINREADY
+    call    HORACON
+    call    HORAREADY
+    call    HOR_INC
+    call    MIN_INC
+
+    goto    MODO_ST
+    
+FECHA_ST:
+    clrf    PORTD
+    bcf	    PORTA, 0
+    bsf	    PORTA, 1
+    call    INICIO_DE_MES
+    call    INICIO_DE_DIA
+    call    MESES_INC
+    call    DIAS_INC
+    call    MESCON
+    call    MESREADY
+    
+    call    DIA_31
+    call    DIAREADY
+
+    goto    MODO_ST
+    
+CONFIG_H:
+    clrf    PORTD
+    bcf	    PORTA, 1
+    bsf	    PORTA, 2
+    
+    call    MINCON
+    call    MINREADY
+    call    HORACON
+    call    HORAREADY
+    goto    MODO_ST
+    
+CONFIG_F:
+    bcf	    PORTA, 2
+    bsf	    PORTA, 3
+    
+    call    MESCON
+    call    MESREADY
+    call    VAMO_A_DARLE
+    goto    MODO_ST
+    
+REINICIO:
+    clrf    PORTA
+    goto     MODO_ST
+    
+    
+;SUBRUTINAS PARA EL MODO HORA
+MINCON:
+    movf    display_min, W ;
+    
+    DIVI   196		    
+    movf    cociente, W
+    movwf   decena	    
+    movf    residuo, W
+    movwf   unidad
+    
+    DIVI   60		    
+    movf    cociente, W
+    movwf   decena	   
+    movf    residuo, W
+    movwf   unidad
+   
+    DIVI   10		     
+    movf    cociente, W
+    movwf   decena	     
+    movf    residuo, W
+    movwf   unidad
+    return
+    
+MINREADY:
+    movf    unidad, W	    ;
+    call    TABLA	    
+    movwf   display_var+3   
+    
+    movf    decena, W	   
+    call    TABLA
+    movwf   display_var+2  
+    return
+
+HORACON:
+    movf    display_hora, W 
+    
+    DIVI   232		    
+    movf    cociente, W
+    movwf   decena_	    
+    movf    residuo, W
+    movwf   unidad_
+
+    DIVI   24		   
+    movf    cociente, W
+    movwf   decena_	    
+    movf    residuo, W
+    movwf   unidad_
+   
+    DIVI   10		    
+    movf    cociente, W
+    movwf   decena_	     
+    movf    residuo, W
+    movwf   unidad_
+    return
+    
+HORAREADY:
+    movf    unidad_, W	    
+    call    TABLA	    
+    movwf   display_var+1   
+    
+    movf    decena_, W	    
+    call    TABLA
+    movwf   display_var+0  
+    return
+
+MIN_INC:
+    movf    contador, W  
+    sublw   60	      
+
+    btfss   ZERO        
+    return
+    clrf    contador      
+    incf    display_dia	
+    return
+    
+HOR_INC:
+    movf    display_min, W   
+    sublw   60	      
+
+    btfss   ZERO        
+    return
+    clrf    display_min        
+    incf    display_hora	
+    return
+
+    
+;SUBRUTINAS PARA MODO FECHA
+INICIO_DE_MES:
+    movlw   0
+    subwf   display_mes, 0
+    btfsc   ZERO
+    incf    display_mes
+    return
+    
+INICIO_DE_DIA:
+    movlw   0
+    subwf   display_dia, 0
+    btfsc   ZERO
+    incf    display_dia
+    return
+    
+DIAS_INC:
+    movf    display_hora, W    
+    sublw   24		    
+
+    btfss   ZERO	    
+    return
+    clrf    display_hora	    
+    incf    display_dia    
+
+MESES_INC:  
+    movlw   1
+    subwf   display_mes, 0
+    btfsc   ZERO
+    goto    M1
+    
+    movlw   2
+    subwf   display_mes, 0
+    btfsc   ZERO
+    goto    M2
+    
+    movlw   3
+    subwf   display_mes, 0
+    btfsc   ZERO
+    goto    M3
+    
+    movlw   4
+    subwf   display_mes, 0
+    btfsc   ZERO
+    goto    M4
+    
+    movlw   5
+    subwf   display_mes, 0
+    btfsc   ZERO
+    goto    M5
+    
+    movlw   6
+    subwf   display_mes, 0
+    btfsc   ZERO
+    goto    M6
+    
+    movlw   7
+    subwf   display_mes, 0
+    btfsc   ZERO
+    goto    M7
+    
+    movlw   8
+    subwf   display_mes, 0
+    btfsc   ZERO
+    goto    M8
+    
+    movlw   9
+    subwf   display_mes, 0
+    btfsc   ZERO
+    goto    M9
+    
+    movlw   10
+    subwf  display_mes, 0
+    btfsc   ZERO
+    goto    M10
+    
+    movlw   11
+    subwf   display_mes, 0
+    btfsc   ZERO
+    goto    M11
+    
+    movlw   12
+    subwf  display_mes, 0
+    btfsc   ZERO
+    goto    M12
+    
+M1:
+    movf    display_dia, W   ;se mueve a W
+    sublw   32		     ;resta 32 a W 
+    btfss   ZERO	 
+    return
+    clrf    display_dia      ;limpia la variable de dias
+    incf    display_mes      ;incrementar la variable mes
+    return  
+;se repiten los pasos para los siguientes meses del año según la cantidad 
+;de días que obtienen
+    
+M2:
+    movf    display_dia, W   
+    sublw   29		  
+    btfss   ZERO	  
+    return
+    clrf    display_dia      
+    incf    display_mes	  ;
+    return  
+
+M3:
+    movf    display_dia  , W   
+    sublw   32		  
+    btfss   ZERO	  
+    return
+    clrf    display_dia        
+    incf    display_mes	  
+    return  
+
+M4:
+    movf    display_dia  , W   
+    sublw   31		 
+    btfss   ZERO	  
+    return
+    clrf    display_dia       
+    incf    display_mes	  
+    return 
+    
+M5:
+    movf    display_dia, W   ;
+    sublw   32		  
+    btfss   ZERO	  
+    return
+    clrf    display_dia      
+    incf    display_mes	 
+    return  
+
+M6:
+    movf    display_dia, W  
+    sublw   31		  
+    btfss   ZERO	  
+    return
+    clrf    display_dia     
+    incf    display_mes	  
+    return
+
+M7:
+    movf    display_dia, W   
+    sublw   32		 
+    btfss   ZERO	 
+    return
+    clrf    display_dia    
+    incf    display_mes	 
+    return  
+    
+M8:
+    movf    display_dia, W   
+    sublw   32		  
+    btfss   ZERO	 
+    return
+    clrf    display_dia     
+    incf    display_mes	
+    return  
+    
+M9:
+    movf    display_dia, W   
+    sublw   31		  
+    btfss   ZERO	  
+    return
+    clrf    display_dia     
+    incf    display_mes	 
+    return
+    
+M10:
+    movf    display_dia, W  
+    sublw   32		  
+    btfss   ZERO	  
+    return
+    clrf    display_dia     
+    incf    display_mes	  
+    return  
+    
+M11:
+    movf    display_dia, W  
+    sublw   31		  
+    btfss   ZERO	 
+    return
+    clrf    display_dia    
+    incf    display_mes	  
+    return
+
+M12:
+    movf    display_dia, W   
+    sublw   32		  
+    btfss   ZERO	  
+    return
+    clrf    display_dia    
+    clrf    display_mes	  
+    return  
+    
+;SUBRUTINAS PARA LA CONFIG DEL MODO FECHA
+VAMO_A_DARLE: 
+    movlw   1
+    subwf   display_mes, 0
+    btfsc   ZERO
+    goto    ENE
+   
+    movlw   2
+    subwf   display_mes, 0
+    btfsc   ZERO
+    goto    FEB
+    
+    movlw   3
+    subwf   display_mes, 0
+    btfsc   ZERO
+    goto    MAR
+
+    movlw   4
+    subwf   display_mes, 0
+    btfsc   ZERO
+    goto    ABR
+    
+    movlw   5
+    subwf   display_mes, 0
+    btfsc   ZERO
+    goto    MAY
+    
+    movlw   6
+    subwf   display_mes, 0
+    btfsc   ZERO
+    goto    JUN
+    
+    movlw   7
+    subwf   display_mes, 0
+    btfsc   ZERO
+    goto    JUL
+    
+    movlw   8
+    subwf   display_mes, 0
+    btfsc   ZERO
+    goto    AGO
+    
+    movlw   9
+    subwf   display_mes, 0
+    btfsc   ZERO
+    goto    SEP
+    
+    movlw   10
+    subwf   display_mes, 0
+    btfsc   ZERO
+    goto    OCTU
+    
+    movlw   11
+    subwf   display_mes, 0
+    btfsc   ZERO
+    goto    NOV
+    
+    movlw   12
+    subwf   display_mes, 0
+    btfsc   ZERO
+    goto    DIC
+    
+ENE:
+    call    DIA_31
+    call    DIAREADY
+    return
+FEB:
+    call    DIA_28
+    call    DIAREADY
+    return
+
+MAR:
+    call    DIA_31
+    call    DIAREADY
+    return
+    
+ABR:
+    call    DIA_30
+    call    DIAREADY
+    return
+
+MAY:
+    call    DIA_31
+    call    DIAREADY
+    return
+    
+JUN:
+    call    DIA_30
+    call    DIAREADY
+    return
+    
+JUL:
+    call    DIA_31
+    call    DIAREADY
+    return
+    
+AGO:
+    call    DIA_31
+    call    DIAREADY
+    return
+
+SEP:
+    call    DIA_30
+    call    DIAREADY
+    return
+    
+OCTU:
+    call    DIA_31
+    call    DIAREADY
+    return
+   
+NOV:
+    call    DIA_30
+    call    DIAREADY
+    return
+    
+DIC:
+    call    DIA_31
+    call    DIAREADY
+    return
+    
+MESCON:
+    movf    display_mes, W 
+    
+    
+    DIVI   243		   
+    movf    cociente, W
+    movwf   decena	    
+    movf    residuo, W
+    movwf   unidad
+    
+    DIVI   13		    
+    movf    cociente, W
+    movwf   decena	    
+    movf    residuo, W
+    movwf   unidad
+    
+    DIVI   10		     
+    movf    cociente, W
+    movwf   decena	     
+    movf    residuo, W
+    movwf   unidad
+    
+    return
+    
+MESREADY:
+    movf    unidad, W	    
+    call    TABLA	   
+    movwf   display_var+3   
+    
+    movf    decena, W	    
+    call    TABLA
+    movwf   display_var+2 
+    return
+
+DIA_31:
+    movf    display_dia, W
+    
+    DIVI   224		   
+    movf    cociente, W
+    movwf   decena_	    
+    movf    residuo, W
+    movwf   unidad_
+    
+    DIVI   32		   
+    movf    cociente, W
+    movwf   decena_	   
+    movf    residuo, W
+    movwf   unidad_
+   
+    DIVI   10		     
+    movf    cociente, W
+    movwf   decena_	     
+    movf    residuo, W
+    movwf   unidad_
+    return
+    
+DIA_30:
+    movf    display_dia, W 
+    
+    DIVI   225		 
+    movf    cociente, W
+    movwf   decena_	    
+    movf    residuo, W
+    movwf   unidad_
+    
+    DIVI   31		    
+    movf    cociente, W
+    movwf   decena_	    
+    movf    residuo, W
+    movwf   unidad_
+   
+    DIVI   10		     
+    movf    cociente, W
+    movwf   decena_	     
+    movf    residuo, W
+    movwf   unidad_
+    return 
+    
+DIA_28:
+    movf    display_dia, W 
+    
+    DIVI   227		    
+    movf    cociente, W
+    movwf   decena_	    
+    movf    residuo, W
+    movwf   unidad_
+    
+    DIVI   29		   
+    movf    cociente, W
+    movwf   decena_	    
+    movf    residuo, W
+    movwf   unidad_
+   
+    DIVI   10		     
+    movf    cociente, W
+    movwf   decena_	   
+    movf    residuo, W
+    movwf   unidad_
+    return   
+    
+DIAREADY:
+    movf    unidad_, W	   
+    call    TABLA	    
+    movwf   display_var+1   
+    
+    movf    decena_, W	    
+    call    TABLA
+    movwf   display_var+0  
+    return 
+    
+    
+PSECT code, delta=2, abs 
+ORG 100h
+;TABLA
+TABLA:
+    clrf    PCLATH
+    bsf	    PCLATH, 0 ;PCLATH = 01
+    andlw   00001111B         ;va a poner en 0 todo lo superior a 16, el valor mas grande es f
+    addwf   PCL		      ;PC = PCLATH + PCL 
+    retlw   00111111B	      ;return y devuelve una literal
+    retlw   00000110B	     
+    retlw   01011011B
+    retlw   01001111B	      ;3
+    retlw   01100110B	      ;4
+    retlw   01101101B	      ;5
+    retlw   01111101B	      ;6
+    retlw   00000111B	      ;7
+    retlw   01111111B	      ;8
+    retlw   01101111B	      ;9
+    retlw   01110111B	      ;A
+    retlw   01111100B	      ;B
+    retlw   00111001B	      ;C
+    retlw   01011110B	      ;D
+    retlw   01111001B	      ;E
+    retlw   01110001B	      ;F    
+ 
+END
